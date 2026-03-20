@@ -1,15 +1,21 @@
 """
-청라 식물공장 재배대별 온습도 도면 투영 시각화 v1
+청라 식물공장 재배대별 온습도 도면 투영 시각화
 실행: python app.py
 접속: http://127.0.0.1:8050
 """
 
-import pandas as pd
+# ── [FIX 1] 누락된 import 추가 ──────────────────
+import json
+import os
+import re
+from datetime import date
+# ────────────────────────────────────────────────
+
 import numpy as np
-import plotly.graph_objects as go
+import pandas as pd
 import plotly.colors as pc
-from dash import Dash, dcc, html, Input, Output, callback, ctx
-import os, re
+import plotly.graph_objects as go
+from dash import Dash, Input, Output, callback, ctx, dcc, html
 
 # ─────────────────────────────────────────────
 # 1. 데이터 로딩
@@ -26,8 +32,17 @@ for df in [df_hourly, df_seasonal, df_summary]:
 
 SEASONS = sorted(df_seasonal["계절"].unique().tolist())
 
+# ── [FIX 2] 누락된 BED_STATUS 로딩 추가 ─────────
+BED_STATUS_PATH = os.path.join(HERE, "bed_status.json")
+if os.path.exists(BED_STATUS_PATH):
+    with open(BED_STATUS_PATH, encoding="utf-8") as f:
+        BED_STATUS = json.load(f)
+else:
+    BED_STATUS = {}
+# ────────────────────────────────────────────────
+
 # ─────────────────────────────────────────────
-# 2. 도면 좌표 정의  (실제 PDF 도면 기반)
+# 2. 도면 좌표 정의  (app_rt_v2 기준 — 실제 PDF 도면 기반)
 #
 #  ┌────────────┐  ┌────────────────────┐  ┌──┐
 #  │  7         │  │ 18                 │  │19│ ← 15~17 옆
@@ -51,7 +66,6 @@ SEASONS = sorted(df_seasonal["계절"].unique().tolist())
 # (bed_id): (x_center, y_center, width, height)
 BED_LAYOUT = {
     # ── 왼쪽 구역: 위(7)→아래(T1), 10개 재배대 ──
-    # y: 93(상단) ~ 8(하단), 간격 약 9.4
     "7" : (15, 93, 18, 7),
     "6" : (15, 83, 18, 7),
     "5" : (15, 73, 18, 7),
@@ -64,7 +78,6 @@ BED_LAYOUT = {
     "T1": (15,  3, 18, 7),
 
     # ── 오른쪽 구역: 위(18)→아래(8), 11개 재배대 ──
-    # y: 93(상단) ~ 3(하단), 간격 약 9.0
     "18": (62, 93, 18, 7),
     "17": (62, 84, 18, 7),
     "16": (62, 75, 18, 7),
@@ -78,8 +91,8 @@ BED_LAYOUT = {
     "8" : (62,  3, 18, 7),
 
     # ── 우측 끝: 19는 16~17 옆, 20은 11~12 옆 ──
-    "19": (85, 79, 9, 16),   # 16(y=75) ~ 17(y=84) 사이
-    "20": (85, 34, 9, 16),   # 11(y=30) ~ 12(y=39) 사이
+    "19": (85, 79, 9, 16),
+    "20": (85, 34, 9, 16),
 }
 
 # ─────────────────────────────────────────────
@@ -103,7 +116,7 @@ def val_to_color(v, vmin, vmax, colorscale):
 
 
 # ─────────────────────────────────────────────
-# 4. 도면 Figure 생성
+# 4. 온습도 도면 Figure 생성
 # ─────────────────────────────────────────────
 
 def make_floor_figure(values, mode, hour, season_label):
@@ -117,23 +130,23 @@ def make_floor_figure(values, mode, hour, season_label):
 
     fig = go.Figure()
 
-    # ── 구역 배경 박스 ──
+    # 구역 배경 박스
     sections = [
-        (5,  25,  -2, 99, "rgba(220,235,255,0.45)"),   # 왼쪽
-        (52, 73,  -2, 99, "rgba(220,255,235,0.45)"),   # 오른쪽
-        (80, 91,  -2, 99, "rgba(255,240,220,0.45)"),   # 우측 끝
+        (5,  25,  -2, 99, "rgba(220,235,255,0.45)"),
+        (52, 73,  -2, 99, "rgba(220,255,235,0.45)"),
+        (80, 91,  -2, 99, "rgba(255,240,220,0.45)"),
     ]
     for x0, x1, y0, y1, color in sections:
         fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
                       fillcolor=color, line=dict(color="#ccc", width=1),
                       layer="below")
 
-    # 구역 레이블 (하단)
+    # 구역 레이블
     for text, x in [("Beds 1~7, T1~T3", 15), ("Beds 8~18", 62), ("19/20", 85)]:
         fig.add_annotation(x=x, y=-5, text=text, showarrow=False,
                            font=dict(size=9, color="#888"), align="center")
 
-    # ── 컬러바용 더미 트레이스 ──
+    # 컬러바용 더미 트레이스
     fig.add_trace(go.Scatter(
         x=[None], y=[None], mode="markers",
         marker=dict(
@@ -150,7 +163,7 @@ def make_floor_figure(values, mode, hour, season_label):
         hoverinfo="skip", showlegend=False
     ))
 
-    # ── 각 재배대 그리기 ──
+    # 각 재배대 그리기
     hover_x, hover_y, hover_text, hover_ids = [], [], [], []
 
     for bed_id, (cx, cy, w, h) in BED_LAYOUT.items():
@@ -166,24 +179,20 @@ def make_floor_figure(values, mode, hour, season_label):
             fill = "#d0d0d0"
             tc = "#888"
 
-        # 사각형
         fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
                       fillcolor=fill, line=dict(color="white", width=2))
 
-        # 재배대 번호
         fig.add_annotation(
             x=cx, y=cy + h*0.15,
             text=f"<b>{bed_id}</b>",
             showarrow=False, font=dict(size=11, color=tc), align="center"
         )
-        # 수치
         fig.add_annotation(
             x=cx, y=cy - h*0.2,
             text=f"{val:.1f}" if val is not None else "N/A",
             showarrow=False, font=dict(size=9, color=tc), align="center"
         )
 
-        # hover 데이터
         if val is not None:
             unit = "°C" if mode == "temp" else "%"
             hover_x.append(cx); hover_y.append(cy)
@@ -204,7 +213,6 @@ def make_floor_figure(values, mode, hour, season_label):
         showlegend=False,
     ))
 
-    # ── 레이아웃 ──
     icon = "🌡" if mode == "temp" else "💧"
     fig.update_layout(
         title=dict(
@@ -248,7 +256,6 @@ def make_time_series(bed_id, mode, season):
 
     fig = go.Figure()
 
-    # 표준편차 밴드
     if col_sd in df.columns:
         sd = df[col_sd]
         fig.add_trace(go.Scatter(
@@ -259,7 +266,6 @@ def make_time_series(bed_id, mode, season):
             hoverinfo="skip", showlegend=False, name="±1σ"
         ))
 
-    # 평균선
     fig.add_trace(go.Scatter(
         x=df["시간"], y=df[col],
         mode="lines+markers",
@@ -295,33 +301,29 @@ def make_time_series(bed_id, mode, season):
     )
     return fig
 
+
 # ─────────────────────────────────────────────
-# 5. 재배 현황 도면 Figure 생성 (신규)
+# 6. 재배 현황 도면 Figure 생성
 # ─────────────────────────────────────────────
+
 def make_cultivation_figure():
     today = date.today()
     fig   = go.Figure()
 
     # 구역 배경
-    for x0, x1, color in [
-        (5, 25,  "rgba(220,235,255,0.5)"),
-        (55, 80, "rgba(220,255,235,0.5)"),
-        (83, 92, "rgba(255,240,220,0.5)"),
-    ]:
-        fig.add_shape(
-            type="rect", x0=x0, y0=6, x1=x1, y1=97,
-            fillcolor=color, line=dict(color="#ccc", width=1),
-        )
+    sections = [
+        (5,  25,  -2, 99, "rgba(220,235,255,0.45)"),
+        (52, 73,  -2, 99, "rgba(220,255,235,0.45)"),
+        (80, 91,  -2, 99, "rgba(255,240,220,0.45)"),
+    ]
+    for x0, x1, y0, y1, color in sections:
+        fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+                      fillcolor=color, line=dict(color="#ccc", width=1),
+                      layer="below")
 
-    for text, x, y in [
-        ("Beds 1~7, T1~T3", 15, 3),
-        ("Beds 8~18",        65, 3),
-        ("19/20",            87, 3),
-    ]:
-        fig.add_annotation(
-            x=x, y=y, text=text, showarrow=False,
-            font=dict(size=9, color="#888"), align="center",
-        )
+    for text, x in [("Beds 1~7, T1~T3", 15), ("Beds 8~18", 62), ("19/20", 85)]:
+        fig.add_annotation(x=x, y=-5, text=text, showarrow=False,
+                           font=dict(size=9, color="#888"), align="center")
 
     hover_x, hover_y, hover_text, hover_ids = [], [], [], []
 
@@ -341,22 +343,17 @@ def make_cultivation_figure():
             continue
 
         info  = BED_STATUS.get(str(int(bed_id)), BED_STATUS.get(bed_id))
-        fill  = "#c8e6c9"  # 기본 연초록
+        fill  = "#c8e6c9"
         tc    = "#1b5e20"
         label = bed_id
         sub   = "정보없음"
 
         if info:
             plant_date = info.get("plant_date")
-            seed_date  = info.get("seed_date")
-            pred       = info.get("prediction")
-
-            # 정식 후 경과일 기반 색상
             if plant_date:
                 try:
-                    pd_obj    = date.fromisoformat(plant_date)
+                    pd_obj     = date.fromisoformat(plant_date)
                     plant_days = (today - pd_obj).days
-                    # 0~7일: 연하늘, 8~14일: 연두, 15~25일: 초록, 26~35일: 노랑, 36+일: 주황
                     if plant_days <= 7:
                         fill, tc = "#e3f2fd", "#1565c0"
                     elif plant_days <= 14:
@@ -413,7 +410,7 @@ def make_cultivation_figure():
 
     fig.add_trace(go.Scatter(
         x=hover_x, y=hover_y, mode="markers",
-        marker=dict(size=32, opacity=0),
+        marker=dict(size=36, opacity=0),
         text=hover_text,
         hovertemplate="%{text}<extra></extra>",
         showlegend=False,
@@ -427,12 +424,13 @@ def make_cultivation_figure():
             font=dict(size=16, family="Malgun Gothic, sans-serif"),
             x=0.5, xanchor="center",
         ),
-        xaxis=dict(range=[0, 100], showgrid=False, zeroline=False,
+        xaxis=dict(range=[0, 97], showgrid=False, zeroline=False,
                    showticklabels=False, fixedrange=True),
-        yaxis=dict(range=[0, 100], showgrid=False, zeroline=False,
+        yaxis=dict(range=[-8, 99], showgrid=False, zeroline=False,
                    showticklabels=False, fixedrange=True, scaleanchor="x"),
         plot_bgcolor="#f8f9fa", paper_bgcolor="#fff",
-        margin=dict(l=10, r=20, t=55, b=10), height=680,
+        margin=dict(l=10, r=20, t=55, b=10), height=720,
+        clickmode="event",
     )
     return fig
 
@@ -441,7 +439,12 @@ def make_bed_detail_card(bed_id_str):
     """클릭된 재배대의 상세 정보 카드"""
     info = BED_STATUS.get(str(int(bed_id_str)), BED_STATUS.get(bed_id_str))
     if not info:
-        return html.P("데이터 없음", style={"color": "#a0aec0"})
+        return html.Div([
+            html.H3("🌿 재배대 상세 정보",
+                    style={"fontSize": "13px", "margin": "0 0 8px", "fontWeight": "600"}),
+            html.P(f"재배대 {bed_id_str}번 데이터 없음",
+                   style={"fontSize": "12px", "color": "#a0aec0", "textAlign": "center", "marginTop": "20px"}),
+        ])
 
     today      = date.today()
     plant_date = info.get("plant_date", "-")
@@ -466,7 +469,7 @@ def make_bed_detail_card(bed_id_str):
                    style={"fontWeight": "600", "fontSize": "12px", "margin": "6px 0"}),
         ]
         for variety in ["버터헤드", "카이피라"]:
-            v = pred["varieties"].get(variety, {})
+            v   = pred["varieties"].get(variety, {})
             cw  = v.get("current_weight_g", 0)
             dr  = v.get("days_remaining")
             td_ = v.get("target_date")
@@ -489,15 +492,16 @@ def make_bed_detail_card(bed_id_str):
 
 def _info_row(label, value):
     return html.Div([
-        html.Span(label,  style={"color": "#718096",  "fontSize": "12px"}),
+        html.Span(label,      style={"color": "#718096",  "fontSize": "12px"}),
         html.Span(str(value), style={"fontWeight": "600", "color": "#2d3748", "fontSize": "12px"}),
     ], style={"display": "flex", "justifyContent": "space-between",
               "padding": "4px 0", "borderBottom": "1px solid rgba(0,0,0,0.06)"})
 
 
 # ─────────────────────────────────────────────
-# 6. 범례 컴포넌트
+# 7. 범례 컴포넌트
 # ─────────────────────────────────────────────
+
 def make_legend():
     items = [
         ("#e3f2fd", "#1565c0", "0~7일  (정식 초기)"),
@@ -522,10 +526,54 @@ def make_legend():
     )
 
 
+def _make_summary_card():
+    today         = date.today()
+    harvest_soon  = []
+    harvest_ready = []
+
+    for bid, info in BED_STATUS.items():
+        pred = info.get("prediction")
+        if not pred:
+            continue
+        for variety in ["버터헤드", "카이피라"]:
+            v  = pred["varieties"].get(variety, {})
+            dr = v.get("days_remaining")
+            if dr is None:
+                continue
+            if dr == 0:
+                harvest_ready.append(f"{bid}번({variety[:2]})")
+            elif dr <= 5:
+                harvest_soon.append(f"{bid}번({variety[:2]}, {dr}일후)")
+
+    return [
+        html.H3("📊 수확 현황 요약",
+                style={"fontSize": "13px", "margin": "0 0 10px", "fontWeight": "600"}),
+        html.Div([
+            html.Span("✅ 수확 가능", style={"color": "#718096", "fontSize": "12px"}),
+            html.Span(
+                ", ".join(harvest_ready) if harvest_ready else "없음",
+                style={"fontWeight": "700", "color": "#38a169", "fontSize": "11px"},
+            ),
+        ], style={"display": "flex", "justifyContent": "space-between",
+                  "padding": "5px 0", "borderBottom": "1px solid rgba(0,0,0,0.06)"}),
+        html.Div([
+            html.Span("⏰ 5일내 수확", style={"color": "#718096", "fontSize": "12px"}),
+            html.Span(
+                ", ".join(harvest_soon) if harvest_soon else "없음",
+                style={"fontWeight": "700", "color": "#dd6b20", "fontSize": "11px"},
+            ),
+        ], style={"display": "flex", "justifyContent": "space-between",
+                  "padding": "5px 0", "borderBottom": "1px solid rgba(0,0,0,0.06)"}),
+        html.P(f"분석 기준: {today} | 목표중량: 130g",
+               style={"fontSize": "10px", "color": "#a0aec0", "marginTop": "8px", "marginBottom": 0}),
+    ]
+
+
 # ─────────────────────────────────────────────
-# 6. Dash 레이아웃
+# 8. Dash 레이아웃
+# ── [FIX 3] suppress_callback_exceptions=True 추가
 # ─────────────────────────────────────────────
-app = Dash(__name__, title="청라 식물공장")
+app = Dash(__name__, title="청라 식물공장", suppress_callback_exceptions=True)
 
 SEASON_OPTIONS = [{"label": "📅 전체 평균", "value": "전체"}] + [
     {"label": f"🍂 {s}", "value": s} for s in SEASONS
@@ -546,31 +594,33 @@ app.layout = html.Div([
 
     # 탭
     dcc.Tabs(id="main-tabs", value="tab-temp", children=[
-        dcc.Tab(label="🌡 온도 분포",    value="tab-temp",  style=TAB_STYLE, selected_style=TAB_SEL_STYLE),
-        dcc.Tab(label="💧 습도 분포",    value="tab-hum",   style=TAB_STYLE, selected_style=TAB_SEL_STYLE),
-        dcc.Tab(label="🌿 재배 현황",    value="tab-cult",  style=TAB_STYLE, selected_style=TAB_SEL_STYLE),
+        dcc.Tab(label="🌡 온도 분포", value="tab-temp", style=TAB_STYLE, selected_style=TAB_SEL_STYLE),
+        dcc.Tab(label="💧 습도 분포", value="tab-hum",  style=TAB_STYLE, selected_style=TAB_SEL_STYLE),
+        dcc.Tab(label="🌿 재배 현황", value="tab-cult", style=TAB_STYLE, selected_style=TAB_SEL_STYLE),
     ], style={"background": "#fff", "borderBottom": "1px solid #e2e8f0"}),
 
-    # 탭 콘텐츠
+    # 탭 콘텐츠 (동적 렌더링)
     html.Div(id="tab-content"),
 
+    # ── [FIX 4] Store를 최상위 layout에 배치 ──
+    # 동적 탭 안에 있으면 탭 전환 시 ID가 사라져 콜백 에러 발생
     dcc.Store(id="selected-bed"),
-    dcc.Store(id="selected-cult-bed"),
     dcc.Store(id="play-state", data=False),
+    # ─────────────────────────────────────────
+
 ], style={"fontFamily": "'Malgun Gothic',sans-serif", "background": "#f7fafc", "minHeight": "100vh"})
 
 
 # ─────────────────────────────────────────────
-# 7. 콜백
+# 9. 콜백
 # ─────────────────────────────────────────────
-
 
 @callback(Output("tab-content", "children"), Input("main-tabs", "value"))
 def render_tab(tab):
     if tab in ("tab-temp", "tab-hum"):
         mode = "temp" if tab == "tab-temp" else "hum"
         return html.Div([
-            # 컨트롤
+            # 컨트롤 바
             html.Div([
                 html.Div([
                     html.Label("🍂 계절", style={"fontWeight": "600", "fontSize": "12px", "color": "#4a5568"}),
@@ -602,16 +652,19 @@ def render_tab(tab):
                 dcc.Graph(id="floor-graph", config={"displayModeBar": False}, style={"flex": "1"}),
                 html.Div([
                     html.Div([
-                        html.H3("📈 시간대별 추이", style={"fontSize": "13px", "margin": "0 0 8px", "fontWeight": "600"}),
+                        html.H3("📈 시간대별 추이",
+                                style={"fontSize": "13px", "margin": "0 0 8px", "fontWeight": "600"}),
                         html.P("도면에서 재배대를 클릭하세요", id="ts-hint",
-                               style={"fontSize": "12px", "color": "#718096", "textAlign": "center", "marginTop": "30px"}),
+                               style={"fontSize": "12px", "color": "#718096",
+                                      "textAlign": "center", "marginTop": "30px"}),
                         dcc.Graph(id="ts-graph", config={"displayModeBar": False},
                                   style={"display": "none", "height": "280px"}),
                     ], style={"background": "#fff", "borderRadius": "8px", "border": "1px solid #e2e8f0",
                               "padding": "14px", "marginBottom": "12px"}),
                     html.Div(id="stats-card",
                              style={"background": "linear-gradient(135deg,#ebf8ff,#e6fffa)",
-                                    "borderRadius": "8px", "border": "1px solid #bee3f8", "padding": "14px"}),
+                                    "borderRadius": "8px", "border": "1px solid #bee3f8",
+                                    "padding": "14px"}),
                 ], style={"width": "300px", "flexShrink": 0}),
             ], style={"display": "flex", "gap": "14px", "padding": "14px 24px", "background": "#f7fafc"}),
         ])
@@ -633,81 +686,39 @@ def render_tab(tab):
                         html.H3("🌿 재배대 상세 정보",
                                 style={"fontSize": "13px", "margin": "0 0 8px", "fontWeight": "600"}),
                         html.P("도면에서 재배대를 클릭하세요",
-                               style={"fontSize": "12px", "color": "#718096", "textAlign": "center", "marginTop": "30px"}),
+                               style={"fontSize": "12px", "color": "#718096",
+                                      "textAlign": "center", "marginTop": "30px"}),
                     ]),
                     style={"background": "#fff", "borderRadius": "8px", "border": "1px solid #e2e8f0",
                            "padding": "14px", "marginBottom": "12px"},
                 ),
-                # 전체 현황 요약
                 html.Div(_make_summary_card(),
                          style={"background": "linear-gradient(135deg,#ebf8ff,#e6fffa)",
-                                "borderRadius": "8px", "border": "1px solid #bee3f8", "padding": "14px"}),
+                                "borderRadius": "8px", "border": "1px solid #bee3f8",
+                                "padding": "14px"}),
             ], style={"width": "300px", "flexShrink": 0}),
         ], style={"display": "flex", "gap": "14px", "padding": "14px 24px", "background": "#f7fafc"}),
     ])
 
 
-def _make_summary_card():
-    today   = date.today()
-    harvest_soon  = []
-    harvest_ready = []
+# ── 온습도 탭 콜백 ────────────────────────────
 
-    for bid, info in BED_STATUS.items():
-        pred = info.get("prediction")
-        if not pred:
-            continue
-        for variety in ["버터헤드", "카이피라"]:
-            v  = pred["varieties"].get(variety, {})
-            dr = v.get("days_remaining")
-            if dr is None:
-                continue
-            if dr == 0:
-                harvest_ready.append(f"{bid}번({variety[:2]})")
-            elif dr <= 5:
-                harvest_soon.append(f"{bid}번({variety[:2]}, {dr}일후)")
-
-    items = [
-        html.H3("📊 수확 현황 요약",
-                style={"fontSize": "13px", "margin": "0 0 10px", "fontWeight": "600"}),
-        html.Div([
-            html.Span("✅ 수확 가능", style={"color": "#718096", "fontSize": "12px"}),
-            html.Span(
-                ", ".join(harvest_ready) if harvest_ready else "없음",
-                style={"fontWeight": "700", "color": "#38a169", "fontSize": "11px"},
-            ),
-        ], style={"display": "flex", "justifyContent": "space-between",
-                  "padding": "5px 0", "borderBottom": "1px solid rgba(0,0,0,0.06)"}),
-        html.Div([
-            html.Span("⏰ 5일내 수확", style={"color": "#718096", "fontSize": "12px"}),
-            html.Span(
-                ", ".join(harvest_soon) if harvest_soon else "없음",
-                style={"fontWeight": "700", "color": "#dd6b20", "fontSize": "11px"},
-            ),
-        ], style={"display": "flex", "justifyContent": "space-between",
-                  "padding": "5px 0", "borderBottom": "1px solid rgba(0,0,0,0.06)"}),
-        html.P(f"분석 기준: {today} | 목표중량: 130g",
-               style={"fontSize": "10px", "color": "#a0aec0", "marginTop": "8px", "marginBottom": 0}),
-    ]
-    return items
-
-
-# 온습도 탭 콜백
 @callback(Output("hour-label", "children"), Input("hour-slider", "value"))
 def upd_label(h):
     return f"🕐 시간: {h:02d}:00"
 
 
 @callback(
-    Output("floor-graph",  "figure"),
-    Output("stats-card",   "children"),
-    Input("mode-store",    "data"),
-    Input("hour-slider",   "value"),
-    Input("season-dd",     "value"),
+    Output("floor-graph", "figure"),
+    Output("stats-card",  "children"),
+    Input("mode-store",   "data"),
+    Input("hour-slider",  "value"),
+    Input("season-dd",    "value"),
 )
 def upd_floor(mode, hour, season):
-    values     = get_values(mode, hour, season)
-    fig        = make_floor_figure(values, mode, hour, season if season != "전체" else "전체 평균")
-    unit       = "°C" if mode == "temp" else "%"
+    values = get_values(mode, hour, season)
+    fig    = make_floor_figure(values, mode, hour, season if season != "전체" else "전체 평균")
+    unit   = "°C" if mode == "temp" else "%"
     if values:
         avg  = np.mean(list(values.values()))
         maxb = max(values, key=values.get)
@@ -742,7 +753,6 @@ def store_click(cd):
     if cd and "points" in cd:
         txt = cd["points"][0].get("text", "")
         if "재배대" in txt:
-            import re
             m = re.search(r"재배대 (\w+)", txt)
             if m:
                 return m.group(1)
@@ -767,10 +777,10 @@ def upd_ts(bed_id, mode, season):
 
 
 @callback(
-    Output("hour-slider", "value"),
+    Output("hour-slider",   "value"),
     Output("anim-interval", "disabled"),
-    Output("play-btn", "children"),
-    Output("play-state", "data"),
+    Output("play-btn",      "children"),
+    Output("play-state",    "data"),
     Input("play-btn",       "n_clicks"),
     Input("anim-interval",  "n_intervals"),
     Input("play-state",     "data"),
@@ -787,7 +797,8 @@ def animate(n_clicks, n_intervals, playing, hour):
     return hour, not playing, ("⏸ 일시정지" if playing else "▶ 재생"), playing
 
 
-# 재배 현황 탭 콜백
+# ── 재배 현황 탭 콜백 ─────────────────────────
+
 @callback(
     Output("cult-detail-card", "children"),
     Input("cult-floor-graph",  "clickData"),
@@ -798,7 +809,8 @@ def cult_click(cd):
         html.H3("🌿 재배대 상세 정보",
                 style={"fontSize": "13px", "margin": "0 0 8px", "fontWeight": "600"}),
         html.P("도면에서 재배대를 클릭하세요",
-               style={"fontSize": "12px", "color": "#718096", "textAlign": "center", "marginTop": "30px"}),
+               style={"fontSize": "12px", "color": "#718096",
+                      "textAlign": "center", "marginTop": "30px"}),
     ])
     if not cd or "points" not in cd:
         return default
