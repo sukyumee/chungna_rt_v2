@@ -339,9 +339,12 @@ def make_cultivation_figure():
                 try:
                     pd_obj     = date.fromisoformat(plant_date_str)
                     plant_days = (today - pd_obj).days
+                  # 수정 후 (정식일수 + 파종일수)
+                  seed_days = (today - seed_date_obj).days
+
                     # ★ GROWTH_STAGES 기준으로 색상 결정
                     fill, tc   = days_to_stage_colors(plant_days)
-                    sub        = f"정식 {plant_days}일차"
+                    sub = f"정식{plant_days}일 / 파종{seed_days}일"
                 except Exception:
                     sub = plant_date_str or "정보없음"
 
